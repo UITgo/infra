@@ -1,0 +1,4 @@
+[submodule "protos"]
+	path = protos
+	url = https://github.com/UITgo/proto
+	branch = main
