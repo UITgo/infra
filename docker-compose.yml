@@ -164,3 +164,21 @@ services:
       - uitgo-net
     depends_on:
        - mongo
+       
+  gateway-service:
+    build: ../gateway-service
+    environment:
+      PORT: 3004                     
+      AUTH_BASE_URL: http://auth-service:3000
+      USER_BASE_URL: http://user-service:3001
+      TRIP_BASE_URL: http://trip-service:3002
+      DRIVER_STREAM_BASE_URL: http://driver-stream:8080
+    depends_on:
+      - auth-service
+      - user-service
+      - trip-service
+      - driver-stream
+    ports:
+      - "3004:3004"
+    networks:
+      - uitgo-net
