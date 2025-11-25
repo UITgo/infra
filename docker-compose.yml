@@ -152,3 +152,15 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3002/healthz >/dev/null || exit 1"]
       <<: *hc
+
+  auth-service:
+    build: ../auth-service                  
+    environment:
+      PORT: 3000                   
+      NODE_ENV: development         
+    ports:
+      - "3000:3000"                
+    networks:
+      - uitgo-net
+    depends_on:
+       - mongo
