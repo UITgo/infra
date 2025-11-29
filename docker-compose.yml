@@ -147,7 +147,7 @@ services:
 
   # TODO(ModuleA-CQRS): Trip service split into command (write) and query (read) services
   trip-command-service:
-    build: ../trip-command-service
+    build: ../trip-service/trip-command-service
     environment:
       # TODO(ModuleA-CQRS): Command service uses PRIMARY_DB_URL for writes
       PRIMARY_DB_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public
@@ -181,7 +181,7 @@ services:
       <<: *hc
 
   trip-query-service:
-    build: ../trip-query-service
+    build: ../trip-service/trip-query-service
     environment:
       # TODO(ModuleA-CQRS): Query service uses READ_DB_URL (read replica in production)
       # In local, READ_DB_URL = PRIMARY_DB_URL (same DB)
