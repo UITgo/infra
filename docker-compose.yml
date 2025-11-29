@@ -80,13 +80,16 @@ services:
       <<: *hc
 
   # ===== Domain services =====
-  driver-stream:
+  # TODO(ModuleA-Shard): Multi-region driver-stream sharding
+  # Option 2: 2 separate containers for HCM and HN regions
+  driver-stream-hcm:
     build: ../driver-stream
+    container_name: driver-stream-hcm
     environment:
       REDIS_ADDR: redis:6379
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis:6379/0  # TODO(ModuleA-Shard): Could use different DB index per region
       KAFKA_BROKERS: kafka:9092
-      KAFKA_TOPIC_LOCATION: driver.location
+      KAFKA_TOPIC_LOCATION: driver.location.hcm  # TODO(ModuleA-Shard): Could use different topic per region
       OSRM_BASE_URL: http://osrm:5000
       HTTP_ADDR: ":8080"
       GRPC_ADDR: ":50052"
@@ -94,8 +97,30 @@ services:
       - redis
       - kafka
       - osrm
-    ports: ["8082:8080"]
+    ports: ["8081:8080"]  # Host port 8081 for HCM
     expose: ["50052"]
+    networks: [uitgo-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz >/dev/null || exit 1"]
+      <<: *hc
+
+  driver-stream-hn:
+    build: ../driver-stream
+    container_name: driver-stream-hn
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_URL: redis://redis:6379/1  # TODO(ModuleA-Shard): Different DB index for HN region
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_LOCATION: driver.location.hn  # TODO(ModuleA-Shard): Different topic for HN
+      OSRM_BASE_URL: http://osrm:5000
+      HTTP_ADDR: ":8080"
+      GRPC_ADDR: ":50053"  # Different gRPC port to avoid conflict
+    depends_on:
+      - redis
+      - kafka
+      - osrm
+    ports: ["8082:8080"]  # Host port 8082 for HN
+    expose: ["50053"]
     networks: [uitgo-net]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz >/dev/null || exit 1"]
@@ -120,37 +145,60 @@ services:
       test: ["CMD-SHELL", "curl -sf http://localhost:3001/healthz >/dev/null || exit 1"]
       <<: *hc
 
-  trip-service:
-    build: ../trip-service
+  # TODO(ModuleA-CQRS): Trip service split into command (write) and query (read) services
+  trip-command-service:
+    build: ../trip-command-service
     environment:
-      # Prisma cần biến này 👇
-      DATABASE_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public
-      # (giữ nếu code bạn còn dùng POSTGRES_URL cho chỗ khác)
+      # TODO(ModuleA-CQRS): Command service uses PRIMARY_DB_URL for writes
+      PRIMARY_DB_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public
+      DATABASE_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public # Fallback
       POSTGRES_URL: postgres://uitgo:uitgo@postgres:5432/tripdb?sslmode=disable
 
-      REDIS_URL: redis:6379
       KAFKA_BROKERS: kafka:9092
       PORT: 3002
-      DRIVER_STREAM_URL: driver-stream:50052
+      DRIVER_STREAM_URL: driver-stream-hcm:50052  # Legacy, keep for compatibility
+      # TODO(ModuleA-Shard): Region-based sharding URLs for driver-stream
+      # Option 2: 2 separate containers - HCM and HN
+      DRIVER_STREAM_HCM_URL: http://driver-stream-hcm:8080
+      DRIVER_STREAM_HN_URL: http://driver-stream-hn:8080
       USER_GRPC_URL: user-service:50051
       OSRM_BASE_URL: http://osrm:5000
-      TRIP_GRPC_URL: 0.0.0.0:50051
       NODE_ENV: production
     volumes:
       - ../proto:/app/proto:ro
     depends_on:
       - postgres
-      - redis
       - kafka
-      - driver-stream
+      - driver-stream-hcm
+      - driver-stream-hn
       - osrm
       - user-service
     ports: ["3002:3002"]
     networks: [uitgo-net]
-    # (tuỳ chọn) Chạy migrate trước rồi start
     command: ["sh","-lc","npx prisma migrate deploy && node dist/main.js"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:3002/healthz >/dev/null || exit 1"]
+      <<: *hc
+
+  trip-query-service:
+    build: ../trip-query-service
+    environment:
+      # TODO(ModuleA-CQRS): Query service uses READ_DB_URL (read replica in production)
+      # In local, READ_DB_URL = PRIMARY_DB_URL (same DB)
+      READ_DB_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public
+      DATABASE_URL: postgresql://uitgo:uitgo@postgres:5432/tripdb?schema=public # Fallback
+
+      REDIS_URL: redis:6379
+      PORT: 3003
+      NODE_ENV: production
+    depends_on:
+      - postgres
+      - redis
+    ports: ["3003:3003"]
+    networks: [uitgo-net]
+    command: ["sh","-lc","npx prisma generate && node dist/main.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3003/healthz >/dev/null || exit 1"]
       <<: *hc
 
   auth-service:
@@ -170,16 +218,20 @@ services:
   gateway-service:
     build: ../gateway-service
     environment:
-      PORT: 3004                     C
+      PORT: 3004
       AUTH_BASE_URL: http://auth-service:3000
       USER_BASE_URL: http://user-service:3001
-      TRIP_BASE_URL: http://trip-service:3002
-      DRIVER_STREAM_BASE_URL: http://driver-stream:8080
+      # TODO(ModuleA-CQRS): Split trip routes between command and query services
+      TRIP_COMMAND_BASE_URL: http://trip-command-service:3002
+      TRIP_QUERY_BASE_URL: http://trip-query-service:3003
+      DRIVER_STREAM_BASE_URL: http://driver-stream-hcm:8080  # Legacy, for backward compatibility
     depends_on:
       - auth-service
       - user-service
-      - trip-service
-      - driver-stream
+      - trip-command-service
+      - trip-query-service
+      - driver-stream-hcm
+      - driver-stream-hn
     ports:
       - "3004:3004"
     networks:

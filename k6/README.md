@@ -118,3 +118,4 @@ k6 run --env TOKEN=$TOKEN --env TRIP_ID=$TRIP_ID trips_read_cached_after.js
 - For cache comparison, ensure the same trip ID is used in both tests
 - Cache TTL is 60 seconds (configured in trip-service)
 
+
