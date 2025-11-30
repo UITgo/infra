@@ -2,8 +2,8 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 // ===== CONFIG =====
-// TODO: Paste your JWT token here (get from login response)
-const TOKEN = 'YOUR_JWT_TOKEN_HERE';
+// Lấy JWT từ env khi chạy k6
+const TOKEN = __ENV.TOKEN || 'YOUR_JWT_TOKEN_HERE';
 
 // Gateway base URL
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:3004';
@@ -13,8 +13,8 @@ export const options = {
   vus: parseInt(__ENV.VUS || '30'),
   duration: __ENV.DURATION || '1m',
   thresholds: {
-    http_req_duration: ['p(95)<200'], // 95% of requests should be below 200ms
-    http_req_failed: ['rate<0.01'], // Error rate should be less than 1%
+    http_req_duration: ['p(95)<200'], // 95% dưới 200ms
+    http_req_failed: ['rate<0.01'],   // error rate < 1%
   },
 };
 
@@ -28,8 +28,7 @@ const HCM_CENTERS = [
 
 function randomLocation() {
   const center = HCM_CENTERS[Math.floor(Math.random() * HCM_CENTERS.length)];
-  // Add random offset within ~5km radius
-  const offsetLat = (Math.random() - 0.5) * 0.05; // ~5km
+  const offsetLat = (Math.random() - 0.5) * 0.05;
   const offsetLng = (Math.random() - 0.5) * 0.05;
   return {
     lat: center.lat + offsetLat,
@@ -50,6 +49,7 @@ export default function () {
       lat: destination.lat,
       lng: destination.lng,
     },
+    cityCode: 'HCM',
     note: 'k6 load test trip',
   });
 
@@ -62,19 +62,35 @@ export default function () {
 
   const res = http.post(`${BASE_URL}/api/v1/trips`, payload, params);
 
+  // 🔍 DEBUG: log non-2xx responses
+  if (res.status !== 200 && res.status !== 201) {
+    console.log('ERROR status =', res.status, 'body =', res.body);
+  }
+
   check(res, {
-    'status is 200 or 201': (r) => r.status === 200 || r.status === 201,
+    'status is 201': (r) => r.status === 201,
     'latency < 200ms': (r) => r.timings.duration < 200,
     'response has trip id': (r) => {
       try {
         const body = JSON.parse(r.body);
-        return body.id !== undefined;
+        return !!body.id;
+      } catch {
+        return false;
+      }
+    },
+    'status is DRIVER_SEARCHING or NO_DRIVER_AVAILABLE': (r) => {
+      try {
+        const body = JSON.parse(r.body);
+        return (
+          body.status === 'DRIVER_SEARCHING' ||
+          body.status === 'NO_DRIVER_AVAILABLE'
+        );
       } catch {
         return false;
       }
     },
   });
 
-  sleep(1); // 1 second between requests
+  sleep(1);
 }
 
